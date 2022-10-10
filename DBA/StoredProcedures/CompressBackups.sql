@@ -13,6 +13,7 @@ Prerequisites:
 		- 7zip tool, the executable file must be available in "C:\Program Files\7-Zip\7z.exe"
 		- "xp_cmdshell" used for executing COPY, COMPRESS, and DELETE Files or Folders
 		- This Job will enable and disable the "xp_cmdshell" setting in SQL Instance, the login executing this job must need the permissions for "sp_configure"
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 Version 20221010
     -   Query stracture format improved as per Azure Data-Studio 
