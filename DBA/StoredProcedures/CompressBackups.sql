@@ -87,7 +87,7 @@ CREATE OR ALTER PROCEDURE [dbo].[CompressBackups]
 
 	@DatabaseName varchar(128) = null,
 	@BackupDate date = null,
-	@BackupDestination varchar(8000) = '\\10.30.31.57\DatabaseBackup$\Production\',
+	@BackupDestination varchar(8000) = '', --- Default destination can be passed here
 	@ExcludeServers varchar(8000) = null,
 	@IncludeServers varchar(8000) = null,
 	@RetentionDays int = 32,
