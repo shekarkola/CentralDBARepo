@@ -239,6 +239,8 @@ BEGIN
                         Delete from @TargetServers where LinkServer = @LinkedServer
                     END CATCH 
                 END
+            
+       --      select * from #TempBackupLog;
 
             IF @DatabaseName is not null 
                 begin
@@ -332,7 +334,8 @@ BEGIN
 
                                 --------------------------------------------------------------------------------------------------------------------
                                     set @SearchKeyDel = (select	convert (nvarchar (8), DATEADD (DAY, (@RetentionDays * -1), getdate ()), 112) );
-                                    select @MonthlyCopyFiles =	'copy "' + @ShareDrive + @DatabaseName +  '\*' + convert(varchar(10), EOMONTH (DATEADD(MONTH,-1,GETDATE())), 112) + '*.*" "' +
+                                    select @MonthlyCopyFiles =	 'mkdir "' + @ShareDrive + @DatabaseName +  '\' + FORMAT (DATEADD(MONTH,-1,GETDATE()), 'yyyy-MMM' ) + '\" & ' + 
+                                                                'copy "' + @ShareDrive + @DatabaseName +  '\*' + convert(varchar(10), EOMONTH (DATEADD(MONTH,-1,GETDATE())), 112) + '*.*" "' +
                                                                 @ShareDrive + @DatabaseName +  '\' + FORMAT (DATEADD(MONTH,-1,GETDATE()), 'yyyy-MMM' ) + '\"'; --- Copies last month-end backup files into month folder "yyyy-MMM"
 
                                     select @MonthlyCopyFolder = 'robocopy "' + @ShareDrive + @DatabaseName +  '\' + convert(varchar(10), EOMONTH (DATEADD(MONTH,-1,GETDATE())), 112) +  '" "' +
@@ -356,7 +359,18 @@ BEGIN
                         END TRY 
 
                         BEGIN CATCH 
-                            PRINT 'ERROR occured while compressing, command "' + @DelCommand + '",  Error: ' + ERROR_MESSAGE();
+                            PRINT 'ERROR occured " ' + ERROR_MESSAGE() + ' while executing following commands: ' + '
+                            ' +
+                            'Command1: ' +  @DelCommand + '
+                            ' +
+                            'Command2: ' +  @DelCommand2 + '
+                            ' +
+                            'Command3: ' +  @ZipCommand + '
+                            '+
+                            'Command4: ' +  @MonthlyCopyFiles + '
+                            '+
+                            'Command5: ' +  @MonthlyCopyFolder 
+                            ;
                             DELETE FROM @TargetDatabases WHERE DatabaseName = @DatabaseName;
                             delete from @CommandResult;
                         END CATCH 
@@ -364,13 +378,21 @@ BEGIN
                 ---- 2nd Loop end
             END
 
-            IF @Compress = 0 ---- Without Compressing the Backup files into .zip file, all backup files moved into dated folders and month folders, and deleted as per retention period 
+        IF @Compress = 0 ---- Without Compressing the Backup files into .zip file, all backup files moved into dated folders and month folders, and deleted as per retention period 
+        BEGIN
+            While exists (select * from @TargetDatabases)
             BEGIN
                 BEGIN TRY 
                     SELECT top 1 @DatabaseName = DatabaseName from @TargetDatabases;
+                    --- Daily copy Job: Copies latest backup files into dated folder "yyyyMMdd" --------------
+                    select @ZipCommand = ('mkdir "' + @ShareDrive + @DatabaseName + '\' + @BackupDateTxt  + '\" & ') + ---- Copy command DESTINATION folder creation 
+                                        ('copy "' + @ShareDrive + @DatabaseName + '\*' + @BackupDateTxt + '*.*" ' ) +  ---- Copy command SOURCE Path 
+                                        ('"' + @ShareDrive + @DatabaseName + '\' + @BackupDateTxt  + '\"' ); --- Copy command DESTINATION path 
 
+                    --- Monthly Copy Job --------------
                         set @SearchKeyDel = (select	convert (nvarchar (8), DATEADD (DAY, (@RetentionDays * -1), getdate ()), 112) );
-                        select @MonthlyCopyFiles =	'copy "' + @ShareDrive + @DatabaseName +  '\*' + convert(varchar(10), EOMONTH (DATEADD(MONTH,-1,GETDATE())), 112) + '*.*" "' +
+                        select @MonthlyCopyFiles =	 'mkdir "' +  @ShareDrive + @DatabaseName +  '\' + FORMAT (DATEADD(MONTH,-1,GETDATE()), 'yyyy-MMM' ) + '\" & ' + 
+                                                    'copy "' + @ShareDrive + @DatabaseName +  '\*' + convert(varchar(10), EOMONTH (DATEADD(MONTH,-1,GETDATE())), 112) + '*.*" "' +
                                                     @ShareDrive + @DatabaseName +  '\' + FORMAT (DATEADD(MONTH,-1,GETDATE()), 'yyyy-MMM' ) + '\"'; --- Copies last month-end backup files into month folder "yyyy-MMM"
 
                         select @MonthlyCopyFolder = 'robocopy "' + @ShareDrive + @DatabaseName +  '\' + convert(varchar(10), EOMONTH (DATEADD(MONTH,-1,GETDATE())), 112) +  '" "' +
@@ -379,6 +401,9 @@ BEGIN
                         Select @DelCommand = 'Del "' + @ShareDrive + @DatabaseName + '\*' + @SearchKeyDel + '*.*" /F /Q'; --- Deletes files that named with older than 30 days or as per Retention parameter value
                         Select @DelCommand2 = 'rmdir "' + @ShareDrive + @DatabaseName + '\' + @SearchKeyDel + '" /S /Q'; --- Deletes folders that named with older than 30 days or as per Retention parameter value
                 
+                        Print FORMAT(GETDATE(), 'yyyy-MMM-dd HH:mm:ss') + ' Executing: ' + @ZipCommand + '; ';
+                        Exec xp_cmdshell @ZipCommand;
+
                         Print FORMAT(GETDATE(), 'yyyy-MMM-dd HH:mm:ss') + ' Executing: ' + @MonthlyCopyFiles + '; ';
                         Print @MonthlyCopyFolder;
                         Exec xp_cmdshell @MonthlyCopyFiles;
@@ -394,11 +419,23 @@ BEGIN
                 END TRY 
 
                 BEGIN CATCH 
-                    PRINT 'ERROR occured while compressing, command "' + @DelCommand + '",  Error: ' + ERROR_MESSAGE();
+                    PRINT 'ERROR occured " ' + ERROR_MESSAGE() + ' while executing following commands: ' + '
+                    '+
+                            'Command1: ' +  @DelCommand + '
+                            ' +
+                            'Command2: ' +  @DelCommand2 + '
+                            ' +
+                            'Command3: ' +  @ZipCommand + '
+                            '+
+                            'Command4: ' +  @MonthlyCopyFiles + '
+                            '+
+                            'Command5: ' +  @MonthlyCopyFolder 
+                            ;
                     DELETE FROM @TargetDatabases WHERE DatabaseName = @DatabaseName;
                     DELETE FROM @CommandResult;
-                END CATCH 
-            END 
+                END CATCH
+            END  
+        END
 
         ---- Reverting Advanced settings that were enable at the begin...
             exec sp_configure 'xp_cmdshell', 0;
