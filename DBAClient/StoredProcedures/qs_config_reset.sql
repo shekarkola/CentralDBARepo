@@ -6,7 +6,7 @@
 Version: 20211019
 	-	Initial Version 
 -------------------------------------------------------------------------------------------------------------------------------------------------*/
-ALTER   PROC [dbo].[query_store_configuration] 
+CREATE OR ALTER PROC [dbo].[qs_config_reset] 
 
 AS
 BEGIN
