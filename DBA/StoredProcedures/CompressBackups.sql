@@ -95,7 +95,7 @@ CREATE OR ALTER PROCEDURE [dbo].[CompressBackups]
 	@IncludeServers varchar(8000) = null,
 	@RetentionDays int = 32,
     @Compress bit = 1,
-	@WeeklyFullBackupDay varchar(25) = null ---- In case weekly Full Backup followed, mentioned the day of Full backup, so that Last Full Backup of each month moved into Monthly Folder
+	@WeeklyFullBackupDay varchar(25) = 'Sunday' ---- In case weekly Full Backup followed, mentioned the day of Full backup, so that Last Full Backup of each month moved into Monthly Folder
 AS
 BEGIN
 
