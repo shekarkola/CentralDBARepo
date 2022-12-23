@@ -5,7 +5,7 @@ GO
 /*
 -- ======================================================================
 -- Author:			SHEKAR KOLA
--- Create date:		2022-12-19
+-- Create date:		2022-12-23
 -- Description:		Database backups archival and compression
 -- ======================================================================
 
@@ -14,6 +14,11 @@ Prerequisites:
 		- "xp_cmdshell" used for executing COPY, COMPRESS, and DELETE Files or Folders
 		- This Job will enable and disable the "xp_cmdshell" setting in SQL Instance, the login executing this job must need the permissions for "sp_configure"
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Version 20221223
+    -   @PurgeOnly parameter added, based on this parameter
+        The procedure focuses on Delete Commands to clean the backups either based on default retention days or selected retention days
+	-	@BackupDestination parameter set as Mandatory 
+
 Version 20221219
     -   @WeeklyFullBackupDay parameter added, based on this parameter
         Last Full Backup of the month will be identified, especically when the Weekly Full backup schedule followed for some databases
@@ -90,12 +95,13 @@ CREATE OR ALTER PROCEDURE [dbo].[CompressBackups]
 
 	@DatabaseName varchar(128) = null,
 	@BackupDate date = null,
-	@BackupDestination varchar(8000) = '', --- Default destination can be passed here
+	@BackupDestination varchar(8000), 
 	@ExcludeServers varchar(8000) = null,
 	@IncludeServers varchar(8000) = null,
 	@RetentionDays int = 32,
     @Compress bit = 1,
-	@WeeklyFullBackupDay varchar(25) = 'Sunday' ---- In case weekly Full Backup followed, mentioned the day of Full backup, so that Last Full Backup of each month moved into Monthly Folder
+	@WeeklyFullBackupDay varchar(25) = 'Sunday', ---- In case weekly Full Backup followed, mentioned the day of Full backup, so that Last Full Backup of each month moved into Monthly Folder
+	@PurgeOnly bit = 0
 AS
 BEGIN
 
@@ -343,7 +349,7 @@ BEGIN
                         END 
                 ---- 1st while loop end 
 
-            IF @Compress = 1 
+            IF @Compress = 1 and @PurgeOnly = 0
             BEGIN  
                 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
                 -- Once backups moved into dated folders, the compressing loop (.Zip) starts inside dated folders, and delete after compression
@@ -424,7 +430,7 @@ BEGIN
                 ---- 2nd Loop end
             END
 
-        IF @Compress = 0 ---- Without Compressing the Backup files into .zip file, all backup files moved into dated folders and month folders, and deleted as per retention period 
+        IF @Compress = 0 and @PurgeOnly = 0 ---- Without Compressing the Backup files into .zip file, all backup files moved into dated folders and month folders, and deleted as per retention period 
         BEGIN
             While exists (select * from @TargetDatabases)
             BEGIN
@@ -477,6 +483,40 @@ BEGIN
                             '+
                             'Command5: ' +  @MonthlyCopyFolder 
                             ;
+                    DELETE FROM @TargetDatabases WHERE DatabaseName = @DatabaseName;
+                    DELETE FROM @CommandResult;
+                END CATCH
+            END  
+        END
+
+	IF @PurgeOnly = 1
+       BEGIN
+            While exists (select * from @TargetDatabases)
+            BEGIN
+                BEGIN TRY 
+                    SELECT top 1 @DatabaseName = DatabaseName from @TargetDatabases;
+
+                        set @SearchKeyDel = (select	convert (nvarchar (8), DATEADD (DAY, (@RetentionDays * -1), getdate ()), 112) );
+
+                        Select @DelCommand = 'Del "' + @ShareDrive + @DatabaseName + '\*' + @SearchKeyDel + '*.*" /F /Q'; --- Deletes files that named with older than 30 days or as per Retention parameter value
+                        Select @DelCommand2 = 'rmdir "' + @ShareDrive + @DatabaseName + '\' + @SearchKeyDel + '" /S /Q'; --- Deletes folders that named with older than 30 days or as per Retention parameter value
+                
+                        Print FORMAT(GETDATE(), 'yyyy-MMM-dd HH:mm:ss') + ' Executing (Old files cleanup): ' + @DelCommand + '; ';
+                        Print @DelCommand2;
+                        Exec xp_cmdshell @DelCommand;
+                        Exec xp_cmdshell @DelCommand2;
+
+                    DELETE FROM @TargetDatabases WHERE DatabaseName = @DatabaseName;
+                    DELETE FROM @CommandResult;
+                END TRY 
+
+                BEGIN CATCH 
+                    PRINT 'ERROR occured " ' + ERROR_MESSAGE() + ' while executing following commands: ' + '
+                    '+
+                            'Command1: ' +  @DelCommand + '
+                            ' +
+                            'Command2: ' +  @DelCommand2 + '
+                            ';
                     DELETE FROM @TargetDatabases WHERE DatabaseName = @DatabaseName;
                     DELETE FROM @CommandResult;
                 END CATCH
