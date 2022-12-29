@@ -314,7 +314,8 @@ BEGIN
             ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
             -- Moving Files into dated folderes
             ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-			        ----- 1st Loop
+			  IF @PurgeOnly = 0      
+			  BEGIN ----- 1st Loop
                     While exists (select * from #TempBackupLog)
                         BEGIN
                             BEGIN TRY 
@@ -347,14 +348,13 @@ BEGIN
                         END CATCH 
                         
                         END 
-                ---- 1st while loop end 
+                END ---- 1st while loop end 
 
             IF @Compress = 1 and @PurgeOnly = 0
-            BEGIN  
+            BEGIN  ----- 2nd Loop
                 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
                 -- Once backups moved into dated folders, the compressing loop (.Zip) starts inside dated folders, and delete after compression
                 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-                ----- 2nd Loop
                 While exists (select * from @TargetDatabases)
                     BEGIN 
                         BEGIN TRY 
@@ -427,8 +427,7 @@ BEGIN
                             delete from @CommandResult;
                         END CATCH 
                     END 
-                ---- 2nd Loop end
-            END
+            END ---- 2nd Loop end
 
         IF @Compress = 0 and @PurgeOnly = 0 ---- Without Compressing the Backup files into .zip file, all backup files moved into dated folders and month folders, and deleted as per retention period 
         BEGIN
