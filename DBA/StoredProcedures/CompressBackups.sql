@@ -5,7 +5,7 @@ GO
 /*
 -- ======================================================================
 -- Author:			SHEKAR KOLA
--- Create date:		2022-12-23
+-- Create date:		2023-01-02
 -- Description:		Database backups archival and compression
 -- ======================================================================
 
@@ -14,6 +14,12 @@ Prerequisites:
 		- "xp_cmdshell" used for executing COPY, COMPRESS, and DELETE Files or Folders
 		- This Job will enable and disable the "xp_cmdshell" setting in SQL Instance, the login executing this job must need the permissions for "sp_configure"
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Version 20230102
+	-	New Parameter (@BackupSource) added, this can be used only when the backup files moved to different folder 
+		other than their native loction where they have created (as per MSDB log), 
+	-	Following new ROBOCOPY options added
+		/IS /IT --> To overwrite the files at destination 
+		/J --> To avoid memory overload 
 Version 20221223
     -   @PurgeOnly parameter added, based on this parameter
         The procedure focuses on Delete Commands to clean the backups either based on default retention days or selected retention days
@@ -101,7 +107,8 @@ CREATE OR ALTER PROCEDURE [dbo].[CompressBackups]
 	@RetentionDays int = 32,
     @Compress bit = 1,
 	@WeeklyFullBackupDay varchar(25) = 'Sunday', ---- In case weekly Full Backup followed, mentioned the day of Full backup, so that Last Full Backup of each month moved into Monthly Folder
-	@PurgeOnly bit = 0
+	@PurgeOnly bit = 0,
+	@BackupSource nvarchar(4000) = null --- This can be used Incase backup files moved to different folder other than the location where they created (as per MSDB log)
 AS
 BEGIN
 
@@ -322,7 +329,19 @@ BEGIN
                             SET		@BackupFileID = (SELECT top 1 FileID FROM #TempBackupLog order by DatabaseName);
                             SET		@BackupDBName = (SELECT top 1 DatabaseName FROM #TempBackupLog WHERE FileID = @BackupFileID);
                             SET		@BackupFileName =(SELECT TOP 1 BackupFileName FROM #TempBackupLog where FileID = @BackupFileID);
-                            SELECT	@MoveSrcFolder = (LEFT (@BackupFileName, (LEN(@BackupFileName)) - CHARINDEX('\', REVERSE(@BackupFileName) ))) ;
+							IF @BackupSource is null 
+								BEGIN 
+								SELECT	@MoveSrcFolder = (LEFT (@BackupFileName, (LEN(@BackupFileName)) - CHARINDEX('\', REVERSE(@BackupFileName) )));
+								END
+							ELSE 
+								BEGIN 
+								SELECT @MoveSrcFolder = CASE WHEN (RIGHT(@BackupSource,1)) = '\' 
+																THEN (@BackupSource + @BackupDBName)
+																--LEFT(@BackupSource, LEN(@BackupSource) -1)
+															ELSE
+																(@BackupSource + '\' + @BackupDBName)
+														END ;
+								END								
                             
                             --- Custom destination location 
                             SELECT	@MoveDstFolder = @BackupDestination + @BackupDBName + '\' + @BackupDateTxt ;
@@ -334,7 +353,7 @@ BEGIN
                                                             ELSE CHARINDEX('\', REVERSE(@BackupFileName) )-1
                                                         END);
                             
-                            SET @MoveCommand = 'robocopy "' + @MoveSrcFolder + '" "' + @MoveDstFolder + '" "' + @MoveFile + '" /MOV';
+                            SET @MoveCommand = 'robocopy "' + @MoveSrcFolder + '" "' + @MoveDstFolder + '" "' + @MoveFile + '" /MOV /IS /IT';
 
                             Print CONVERT(VARCHAR(20),GETDATE(),120) + ' executing command: ' +  @MoveCommand +';'
                             EXEC xp_cmdshell @MoveCommand;
