@@ -156,7 +156,7 @@ BEGIN
 					@MonthlyCopyFiles2 nvarchar (4000),
                     @MonthlyCopyFolder nvarchar (4000),
 					@MonthlyCopyFolder2 nvarchar (4000),
-					@LastWeekOfMonth nvarchar(4000);
+					@LastWeekOfMonth datetime;
 
             --- Mandatory setting to be enabled to perform MS-DOS commands -------------------------
             BEGIN
@@ -192,31 +192,32 @@ BEGIN
 					begin 
 						IF @WeeklyFullBackupDay = 'Monday'
 							begin 
-								SELECT @LastWeekOfMonth = DATEADD(day,DATEDIFF(day,'19000101',DATEADD(month,DATEDIFF(MONTH,0,GETDATE() /*YourValuehere*/),30))/7*7,'19000101')
+								SELECT @LastWeekOfMonth = DATEADD(day,DATEDIFF(day,'19000101',DATEADD(month,DATEDIFF(MONTH,0,  DATEADD(MONTH,-1,GETDATE())  /*YourValuehere*/),30))/7*7,'19000101')
 							end
 						IF @WeeklyFullBackupDay = 'Tuesday'
 							begin 
-								SELECT @LastWeekOfMonth = DATEADD(day,DATEDIFF(day,'19000102',DATEADD(month,DATEDIFF(MONTH,0,GETDATE() /*YourValuehere*/),30))/7*7,'19000102')
+								SELECT @LastWeekOfMonth = DATEADD(day,DATEDIFF(day,'19000102',DATEADD(month,DATEDIFF(MONTH,0,  DATEADD(MONTH,-1,GETDATE())  /*YourValuehere*/),30))/7*7,'19000102')
 							end
 						IF @WeeklyFullBackupDay = 'Wednesday'
 							begin 
-								SELECT @LastWeekOfMonth = DATEADD(day,DATEDIFF(day,'19000103',DATEADD(month,DATEDIFF(MONTH,0,GETDATE() /*YourValuehere*/),30))/7*7,'19000103')
+								SELECT @LastWeekOfMonth = DATEADD(day,DATEDIFF(day,'19000103',DATEADD(month,DATEDIFF(MONTH,0,  DATEADD(MONTH,-1,GETDATE())  /*YourValuehere*/),30))/7*7,'19000103')
 							end
 						IF @WeeklyFullBackupDay = 'Thursday'
 							begin 
-								SELECT @LastWeekOfMonth = DATEADD(day,DATEDIFF(day,'19000104',DATEADD(month,DATEDIFF(MONTH,0,GETDATE() /*YourValuehere*/),30))/7*7,'19000104')
+								SELECT @LastWeekOfMonth = DATEADD(day,DATEDIFF(day,'19000104',DATEADD(month,DATEDIFF(MONTH,0,  DATEADD(MONTH,-1,GETDATE())  /*YourValuehere*/),30))/7*7,'19000104')
 							end
 						IF @WeeklyFullBackupDay = 'Friday'
 							begin 
-								SELECT @LastWeekOfMonth = DATEADD(day,DATEDIFF(day,'19000105',DATEADD(month,DATEDIFF(MONTH,0,GETDATE() /*YourValuehere*/),30))/7*7,'19000105')
+								SELECT @LastWeekOfMonth = DATEADD(day,DATEDIFF(day,'19000105',DATEADD(month,DATEDIFF(MONTH,0,  DATEADD(MONTH,-1,GETDATE())  /*YourValuehere*/),30))/7*7,'19000105')
 							end
 						IF @WeeklyFullBackupDay = 'Saturday'
 							begin 
-								SELECT @LastWeekOfMonth = DATEADD(day,DATEDIFF(day,'19000106',DATEADD(month,DATEDIFF(MONTH,0,GETDATE() /*YourValuehere*/),30))/7*7,'19000106')
+								SELECT @LastWeekOfMonth = DATEADD(day,DATEDIFF(day,'19000106',DATEADD(month,DATEDIFF(MONTH,0,  DATEADD(MONTH,-1,GETDATE())  /*YourValuehere*/),30))/7*7,'19000106')
 							end
 						IF @WeeklyFullBackupDay = 'Sunday'
 							begin 
-								SELECT @LastWeekOfMonth = DATEADD(day,DATEDIFF(day,'19000107',DATEADD(month,DATEDIFF(MONTH,0,GETDATE() /*YourValuehere*/),30))/7*7,'19000107')
+								SELECT @LastWeekOfMonth = DATEADD(day,DATEDIFF(day,'19000107',DATEADD(month,DATEDIFF(MONTH,0,  DATEADD(MONTH,-1,GETDATE())  /*YourValuehere*/),30))/7*7,'19000107')
+
 							end
 					end 
 
@@ -415,10 +416,14 @@ BEGIN
                                     Select @DelCommand = 'Del "' + @ShareDrive + @DatabaseName + '\*' + @SearchKeyDel + '*.*" /F /Q'; --- Deletes files that named with older than 30 days or as per Retention parameter value
                                     Select @DelCommand2 = 'rmdir "' + @ShareDrive + @DatabaseName + '\' + @SearchKeyDel + '" /S /Q'; --- Deletes folders that named with older than 30 days or as per Retention parameter value
                             
-                                    Print FORMAT(GETDATE(), 'yyyy-MMM-dd HH:mm:ss') + ' Executing: ' + @MonthlyCopyFiles + '; ';
-                                    Print @MonthlyCopyFolder;
-                                    Exec xp_cmdshell @MonthlyCopyFiles;
-                                    Exec xp_cmdshell @MonthlyCopyFolder;
+									Print FORMAT(GETDATE(), 'yyyy-MMM-dd HH:mm:ss') + ' Executing (Monthly Copy files): ' + @MonthlyCopyFiles + '; ';
+									Exec xp_cmdshell @MonthlyCopyFiles;
+									Print FORMAT(GETDATE(), 'yyyy-MMM-dd HH:mm:ss') + ' Executing (Monthly Copy last FULL backup of month): ' + @MonthlyCopyFiles2 + '; ';
+									Exec xp_cmdshell @MonthlyCopyFiles2;
+									Print FORMAT(GETDATE(), 'yyyy-MMM-dd HH:mm:ss') + ' Executing (Monthly Copy folder): ' + @MonthlyCopyFolder + '; ';
+									Exec xp_cmdshell @MonthlyCopyFolder;
+									Print FORMAT(GETDATE(), 'yyyy-MMM-dd HH:mm:ss') + ' Executing (Monthly Copy last FULL backup of month): ' + @MonthlyCopyFolder2 + '; ';
+									Exec xp_cmdshell @MonthlyCopyFolder2;
 
                                     Print FORMAT(GETDATE(), 'yyyy-MMM-dd HH:mm:ss') + ' Executing (Old files cleanup): ' + @DelCommand + '; ';
                                     Print @DelCommand2;
@@ -461,12 +466,19 @@ BEGIN
 
                     --- Monthly Copy Job --------------
                         set @SearchKeyDel = (select	convert (nvarchar (8), DATEADD (DAY, (@RetentionDays * -1), getdate ()), 112) );
-                        select @MonthlyCopyFiles =	 'mkdir "' +  @ShareDrive + @DatabaseName +  '\' + FORMAT (DATEADD(MONTH,-1,GETDATE()), 'yyyy-MMM' ) + '\" & ' + 
-                                                    'copy "' + @ShareDrive + @DatabaseName +  '\*' + convert(varchar(10), EOMONTH (DATEADD(MONTH,-1,GETDATE())), 112) + '*.*" "' +
-                                                    @ShareDrive + @DatabaseName +  '\' + FORMAT (DATEADD(MONTH,-1,GETDATE()), 'yyyy-MMM' ) + '\"'; --- Copies last month-end backup files into month folder "yyyy-MMM"
+						select @MonthlyCopyFiles =	 'mkdir "' + @ShareDrive + @DatabaseName +  '\' + FORMAT (DATEADD(MONTH,-1,GETDATE()), 'yyyy-MMM' ) + '\" & ' + 
+													'copy "' + @ShareDrive + @DatabaseName +  '\*' + convert(varchar(10), EOMONTH (DATEADD(MONTH,-1,GETDATE())), 112) + '*FULL*.*" "' +
+													@ShareDrive + @DatabaseName +  '\' + FORMAT (DATEADD(MONTH,-1,GETDATE()), 'yyyy-MMM' ) + '\"'; --- Copies last month-end FULL backup files into month folder "yyyy-MMM"
 
-                        select @MonthlyCopyFolder = 'robocopy "' + @ShareDrive + @DatabaseName +  '\' + convert(varchar(10), EOMONTH (DATEADD(MONTH,-1,GETDATE())), 112) +  '" "' +
-                                                    @ShareDrive + @DatabaseName +  '\' + FORMAT (DATEADD(MONTH,-1,GETDATE()), 'yyyy-MMM' ) + '" /MOVE'; --- Copies last month-end backup files into month folder "yyyy-MMM"
+						select @MonthlyCopyFiles2 =	 'mkdir "' + @ShareDrive + @DatabaseName +  '\' + FORMAT (DATEADD(MONTH,-1,GETDATE()), 'yyyy-MMM' ) + '\" & ' + 
+													'copy "' + @ShareDrive + @DatabaseName +  '\*' + convert(varchar(10), @LastWeekOfMonth, 112) + '*FULL*.*" "' +
+													@ShareDrive + @DatabaseName +  '\' + FORMAT (DATEADD(MONTH,-1,GETDATE()), 'yyyy-MMM' ) + '\"'; --- Copies last month-end FULL backup files into month folder "yyyy-MMM"
+
+						select @MonthlyCopyFolder = 'robocopy "' + @ShareDrive + @DatabaseName +  '\' + convert(varchar(10), EOMONTH (DATEADD(MONTH,-1,GETDATE())), 112) +  '" "' +
+													@ShareDrive + @DatabaseName +  '\' + FORMAT (DATEADD(MONTH,-1,GETDATE()), 'yyyy-MMM' ) + '" /MOVE'; --- Copies last month-end backup files into month folder "yyyy-MMM"
+
+						select @MonthlyCopyFolder2 = 'robocopy "' + @ShareDrive + @DatabaseName +  '\' + convert(varchar(10), @LastWeekOfMonth, 112) +  '" "' +
+													@ShareDrive + @DatabaseName +  '\' + FORMAT (DATEADD(MONTH,-1,GETDATE()), 'yyyy-MMM' ) + '" /MOVE'; --- Copies last month-end backup files into month folder "yyyy-MMM"
 
                         Select @DelCommand = 'Del "' + @ShareDrive + @DatabaseName + '\*' + @SearchKeyDel + '*.*" /F /Q'; --- Deletes files that named with older than 30 days or as per Retention parameter value
                         Select @DelCommand2 = 'rmdir "' + @ShareDrive + @DatabaseName + '\' + @SearchKeyDel + '" /S /Q'; --- Deletes folders that named with older than 30 days or as per Retention parameter value
@@ -474,10 +486,14 @@ BEGIN
                         Print FORMAT(GETDATE(), 'yyyy-MMM-dd HH:mm:ss') + ' Executing: ' + @ZipCommand + '; ';
                         Exec xp_cmdshell @ZipCommand;
 
-                        Print FORMAT(GETDATE(), 'yyyy-MMM-dd HH:mm:ss') + ' Executing: ' + @MonthlyCopyFiles + '; ';
-                        Print @MonthlyCopyFolder;
-                        Exec xp_cmdshell @MonthlyCopyFiles;
-                        Exec xp_cmdshell @MonthlyCopyFolder;
+						Print FORMAT(GETDATE(), 'yyyy-MMM-dd HH:mm:ss') + ' Executing (Monthly Copy files): ' + @MonthlyCopyFiles + '; ';
+						Exec xp_cmdshell @MonthlyCopyFiles;
+						Print FORMAT(GETDATE(), 'yyyy-MMM-dd HH:mm:ss') + ' Executing (Monthly Copy last FULL backup of month): ' + @MonthlyCopyFiles2 + '; ';
+						Exec xp_cmdshell @MonthlyCopyFiles2;
+						Print FORMAT(GETDATE(), 'yyyy-MMM-dd HH:mm:ss') + ' Executing (Monthly Copy folder): ' + @MonthlyCopyFolder + '; ';
+						Exec xp_cmdshell @MonthlyCopyFolder;
+						Print FORMAT(GETDATE(), 'yyyy-MMM-dd HH:mm:ss') + ' Executing (Monthly Copy last FULL backup of month): ' + @MonthlyCopyFolder2 + '; ';
+						Exec xp_cmdshell @MonthlyCopyFolder2;
 
                         Print FORMAT(GETDATE(), 'yyyy-MMM-dd HH:mm:ss') + ' Executing (Old files cleanup): ' + @DelCommand + '; ';
                         Print @DelCommand2;
