@@ -11,8 +11,8 @@ select	ItemID,
 			SUBSTRING(ItemPath, 2,  (CHARINDEX('/',(ItemPath),2 )-2))
 			END as ParentFolder,
 		(CASE ItemType 
-			WHEN 13 Then 'Http://bi.pom.ae/BI/powerbi' + ItemPath
-			ELSE 'Http://bi.pom.ae/BI/report' + ItemPath
+			WHEN 13 Then 'http://baseurl' + ItemPath
+			ELSE 'http://baseurl/BI/report' + ItemPath
 		END) as ReportURL
 		,ItemName
 		--,ItemAction
@@ -32,4 +32,5 @@ group by ItemID,
 		,FORMAT(TimeStart,'yyyyMM')
 		--,ItemAction
 GO
+
 
