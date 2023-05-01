@@ -1,5 +1,10 @@
 USE [DBAClient]
 GO
+/****** Object:  StoredProcedure [dbo].[DoBackup_test]    Script Date: 4/19/2023 3:03:48 PM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------
 -- Author:			Shekar Kola
@@ -46,7 +51,7 @@ Version: 20191204
 
 ---------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-CREATE OR ALTER PROCEDURE [dbo].[DoBackup_test]
+ALTER   PROCEDURE [dbo].[DoBackup]
 	-- Add the parameters for the stored procedure here
 		@DatabaseName nvarchar (4000) = Null,
 		@BackupType nvarchar (25) = Null,
@@ -347,5 +352,3 @@ BEGIN
 
 	SELECT GETDATE() as EndTime;
 END
-go
-

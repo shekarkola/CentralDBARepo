@@ -63,7 +63,7 @@ END
 ---Insert New Sample data----------------------------------------------------------------------------------------------------
 insert into [sysprocesses_log]
 ([sample_time], [databasename], [spid], wait_type, wait_time_ms, blocked_by, [hostname], [program_name], [loginame], [user_name], [login_time], [last_batch]
-, [cpu], [physical_io],memory_usage_mb, [open_tran], [status], [cmd], [text], client_interface_name, client_int_version, isolation_level, collected_by)
+, [cpu], [physical_io],memory_usage_mb, [open_tran], [status], [cmd], [text], client_interface_name, client_int_version, isolation_level)
 select	GETDATE() as sample_time
 		,DB_NAME(sp.[dbid]) as databasename,
 		sp.spid, 
