@@ -7,13 +7,14 @@ with db as (select	 t.DATABASENAME as DatabaseName, IS_JOINED_AVAILABILITYGROUPS
 			from database_master as t 
 			where IS_DROPPED = 0 and (IS_AG_PRIMARY = 1 or IS_JOINED_AVAILABILITYGROUPS = 0)
 			)
+
 , primary_rep as (
 select DATABASENAME, max(INSTANCEFULLNAME) as INSTANCE_FULLNAME  
 from database_master as t 
 where IS_DROPPED = 0 and (IS_AG_PRIMARY = 1 or IS_JOINED_AVAILABILITYGROUPS = 0)
 group by DATABASENAME
 )
-
+--- Latest Reserved and Used MB from log 
 ,dbsize as (SELECT DatabaseName
 		,SUM(RESERVED_MB) as reserved_mb
 		,SUM(USED_MB) as used_mb
@@ -21,7 +22,7 @@ group by DATABASENAME
 FROM (
 select sl.DatabaseName
 		,sl.LOG_DATE as Logdate
-		,ROW_NUMBER() OVER (PARTITION BY sl.DatabaseName, sl.ALLOCATIONTYPE ORDER BY sl.LOG_DATE desc) as rn 
+		,ROW_NUMBER() OVER (PARTITION BY sl.DATABASENAME, sl.USAGETYPE, sl.ALLOCATIONTYPE ORDER BY sl.LOG_DATE desc) as rn 
 		, sl.ALLOCATIONTYPE
 		, sl.RESERVED_MB
 		, sl.USED_MB
