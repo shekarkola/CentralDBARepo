@@ -17,88 +17,155 @@ Versions:
 
 CREATE OR ALTER proc [dbo].[collect_sysprocesses_log] 
     @collected_by NVARCHAR (500) = ''
+	
+AS
+BEGIN
 
-as 
-set nocount on ;
+SET NOCOUNT ON;
 
-begin
+if (select object_id('database_properties')) is null 
+	begin 
+		create table database_properties
+		(RECID int identity (1,1),
+			[INSTANCEFULLNAME] [nvarchar](128) NULL,
+			[INSTANCENAME] [nvarchar](128) NULL,
+			[DATABASE_ID] [int] NOT NULL,
+			[DATABASENAME] [sysname] NOT NULL,
+			[CREATE_DATE] [datetime] NOT NULL,
+			[COMPATIBILITY_LEVEL] [tinyint] NOT NULL,
+			[COLLATION_NAME] [sysname] NULL,
+			[RECOVERY_MODEL] [nvarchar](60) NULL,
+			[IS_AUTO_CREATE_STATS_ON] [bit] NULL,
+			[IS_AUTO_UPDATE_STATS_ON] [bit] NULL,
+			[IS_FULLTEXT_ENABLED] [bit] NULL,
+			[IS_TRUSTWORTHY_ON] [bit] NULL,
+			[IS_ENCRYPTED] [bit] NULL,
+			[IS_QUERY_STORE_ON] [bit] NULL,
+			[IS_PUBLISHED] [bit] NOT NULL,
+			[IS_SUBSCRIBED] [bit] NOT NULL,
+			[IS_MERGE_PUBLISHED] [bit] NOT NULL,
+			[IS_DISTRIBUTOR] [bit] NOT NULL,
+			[LOG_REUSE_WAIT] [nvarchar](60) NULL,
+			[IS_JOINED_AVAILABILITYGROUPS] [int] NOT NULL,
+			[TARGET_RECOVERY_SECONDS] [int] NULL,
+			[CONTAINMENT] [nvarchar](60) NULL,
+			[AGNAME] [sysname] NULL,
+			[IS_AG_PRIMARY] [bit] NULL,
+			[IS_BACKUP_SCHEDULED] [int] NOT NULL,
+			[IS_INDEXMAINTAIN_SCHEDULED] [int] NOT NULL,
+			DB_STATE smallint,
+			APPLICATION_NAME nvarchar(250),
+			DB_DESCRIPTION nvarchar(500),
+			IS_IN_STANDBY bit
+			);
+	end
 
----Tables Creation----------------------------------------------------------------------------------------------------
+if (select object_id('tempdb..#TargetDBs')) is null 
+	begin 
+		create table #TargetDBs
+		([database_name] nvarchar(500));
+	end
 
-IF (select OBJECT_ID ('sysprocesses_log')) IS NULL 
-BEGIN 
-CREATE TABLE [dbo].[sysprocesses_log](
-	[sample_time] [datetime] NOT NULL,
-	[databasename] [nvarchar](128) NULL,
-	[spid] [smallint] NOT NULL,
-	wait_type varchar(200),
-	wait_time_ms int,
-	blocked_by int,
-	[hostname] [nchar](128) NOT NULL,
-	[program_name] [nchar](128) NOT NULL,
-	[loginame] [nchar](128) NOT NULL,
-	[user_name] [nchar](128) NOT NULL,
-	[login_time] [datetime] NOT NULL,
-	[last_batch] [datetime] NOT NULL,
-	[cpu] [int] NOT NULL,
-	[physical_io] [bigint] NOT NULL,
-	[open_tran] [smallint] NOT NULL,
-	[status] [nchar](30) NOT NULL,
-	[cmd] [nchar](16) NOT NULL,
-	[text] [nvarchar](max) NULL,
-	[memory_usage_mb] [numeric](10, 2) NULL,
-	client_interface_name nvarchar(256),
-	client_int_version float,
-	isolation_level varchar(128),
-    collected_by nvarchar (500),
-) ON [PRIMARY] TEXTIMAGE_ON [PRIMARY]
+if (select object_id('tempdb..#XProperties')) is null 
+	begin 
+		create table #XProperties
+		(InstanceFullName nvarchar(128), database_id int, [database_name] nvarchar(500), property_name nvarchar(250), property_value nvarchar(500));
+	end
 
-END
----Tables Creation end ----------------------------------------------------------------------------------------------------
---begin 
---	insert into who_is_active_log
---	exec DBAClient.dbo.sp_WhoIsActive;
---end 
+insert into #TargetDBs
+select name from sys.databases as dbs
+LEFT OUTER JOIN sys.dm_hadr_database_replica_states drs
+    ON dbs.database_id = drs.database_id
+LEFT OUTER JOIN sys.dm_hadr_availability_replica_states ars
+    ON ars.replica_id = drs.replica_id
+LEFT OUTER JOIN sys.availability_replicas ar
+    ON ar.replica_id = ars.replica_id
+where (state = 0 and dbs.database_id > 4) ---> Exclude system databases, include only ONLINE databases 
+and ( (drs.is_local = 1 and ---> Inclue non duplicate AG databases
+     ar.secondary_role_allow_connections_desc <> 'NO' ) --> Consider Readable AG databases
+	 or drs.replica_id is null); ---> DBs that are not part of AG
 
----Insert New Sample data----------------------------------------------------------------------------------------------------
-insert into [sysprocesses_log]
-([sample_time], [databasename], [spid], wait_type, wait_time_ms, blocked_by, [hostname], [program_name], [loginame], [user_name], [login_time], [last_batch]
-, [cpu], [physical_io],memory_usage_mb, [open_tran], [status], [cmd], [text], client_interface_name, client_int_version, isolation_level, collected_by)
-select	GETDATE() as sample_time
-		,DB_NAME(sp.[dbid]) as databasename,
-		sp.spid, 
-		lastwaittype,
-		waittime,
-		blocked, hostname, sp.[program_name], loginame, sp.nt_username,
-		sp.login_time, last_batch, 
-		cpu, physical_io, (memusage*8.0)/1024 as mem_usage_mb,
-		open_tran, sp.status, 
-		cmd,
-		t.text,
-		s.client_interface_name, s.client_version
-		,case s.transaction_isolation_level
-		when 0 THEN  'Unspecified'
-		when 1 THEN  'ReadUncommitted'
-		when 2 THEN  'ReadCommitted'
-		when 3 THEN  'RepeatableRead'
-		when 4 THEN  'Serializable'
-		when 5 THEN  'Snapshot' end
-        ,@collected_by
-from sys.sysprocesses as sp
-cross apply sys.dm_exec_sql_text(sp.sql_handle) t
-inner join sys.dm_exec_sessions as s on sp.spid = s.session_id
-where sp.status <> 'background';
----Insert New Sample data end----------------------------------------------------------------------------------------------------
+Declare @dbname nvarchar(500);
+Declare @cmd1 nvarchar(4000);
+Declare @cmd2 nvarchar(4000);
 
+while exists (select 1 from #TargetDBs)
+begin 
+	print 'Loop started..'
+	set @dbname = (select top 1 [database_name] from #TargetDBs);
+	select @cmd1 = 'use [' + @dbname + ']; ' +
+	'select db_id(), db_name() as [database_name], cast([name] as  nvarchar(250)) as name, cast(value as nvarchar(250)) as value
+	 from sys.extended_properties where class = 0 ';
 
----Delete sample data as per retention period----------------------------------------------------------------------------------------------------
+	print @cmd1;
+	insert into #XProperties (database_id, [database_name], property_name, property_value)
+	exec(@cmd1);
+	Print 'Extended Property "Application" processed in temp for the DB ' + @dbname;
 
-Declare @older_than datetime = DATEADD (DAY,-90, GETDATE());
+	DELETE FROM #TargetDBs where database_name = @dbname;
+end 
 
-delete from sysprocesses_log where sample_time <= @older_than;
-delete from who_is_active_log where collection_time <= @older_than;
+--- Drop temporary tables 
+drop table #TargetDBs;
+
+BEGIN
+	TRUNCATE TABLE database_properties;
+
+	insert into database_properties ([INSTANCEFULLNAME], [INSTANCENAME], [DATABASE_ID], [DATABASENAME], [CREATE_DATE], [COMPATIBILITY_LEVEL], [COLLATION_NAME], [RECOVERY_MODEL], [IS_AUTO_CREATE_STATS_ON], [IS_AUTO_UPDATE_STATS_ON], [IS_FULLTEXT_ENABLED], [IS_TRUSTWORTHY_ON], [IS_ENCRYPTED], [IS_QUERY_STORE_ON], [IS_PUBLISHED], [IS_SUBSCRIBED], [IS_MERGE_PUBLISHED], [IS_DISTRIBUTOR], [LOG_REUSE_WAIT], [IS_JOINED_AVAILABILITYGROUPS], [TARGET_RECOVERY_SECONDS], [CONTAINMENT], [AGNAME], [IS_AG_PRIMARY], [IS_BACKUP_SCHEDULED], [IS_INDEXMAINTAIN_SCHEDULED], [DB_State], [APPLICATION_NAME], [DB_DESCRIPTION], IS_IN_STANDBY)
+	select  @@SERVERNAME INSTANCEFULLNAME, @@SERVERNAME as INSTANCENAME,
+			d.database_id,
+			d.name as databasename,
+			create_date,
+			compatibility_level,
+			collation_name,
+			recovery_model_desc as recovery_model,
+			is_auto_create_stats_on,
+			is_auto_update_stats_on,
+			is_fulltext_enabled,
+			is_trustworthy_on,
+			is_encrypted,
+			is_query_store_on,
+			is_published,
+			is_subscribed,
+			is_merge_published,
+			is_distributor,
+			log_reuse_wait_desc as log_reuse_wait,
+			iif(d.group_database_id is null, 0, 1) as is_joined_availabilitygroups,
+			target_recovery_time_in_seconds as target_recovery_seconds,
+			containment_desc as containment,
+			ag.name as agname,
+			agdb.is_primary_replica as is_ag_primary,
+			0 as is_backup_scheduled,
+			0 as is_indexmaintain_scheduled,
+			state,
+			ep.property_value as  application_name,
+			ep2.property_value as description,
+			d.is_in_standby
+	from sys.databases as d 
+	left outer join master.sys.dm_hadr_database_replica_states as agdb on d.group_database_id = agdb.group_database_id and agdb.is_local = 1
+	left outer join master.sys.availability_groups as ag on agdb.group_id = ag.group_id
+	left outer join #XProperties as ep on d.database_id = ep.database_id and ep.property_name = 'Application'
+	left outer join #XProperties as ep2 on d.database_id = ep2.database_id and ep2.property_name = 'Description'
+	where d.database_id > 4
+		and not exists (
+					select 1 
+					from database_properties as t
+					where d.database_id = t.database_id 
+					 );
+
+	update t  set t.APPLICATION_NAME = s.property_value
+	from database_properties as t
+	join #XProperties as s on t.InstanceFullName = s.InstanceFullName and t.database_id = s.database_id and s.property_name = 'Application';
+
+	update t  set t.DB_DESCRIPTION = s.property_value
+	from database_properties as t
+	join #XProperties as s on t.InstanceFullName = s.InstanceFullName and t.database_id = s.database_id and s.property_name = 'Description';
+
 
 END 
+-- select * from database_properties;
+
+END
 GO
 
 
