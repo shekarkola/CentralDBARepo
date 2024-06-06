@@ -1,17 +1,20 @@
 USE [DBAClient]
 GO
 
-
--- ==================================================================================
+/*-- ==================================================================================
 -- Author:			Shekar Kola
 -- Create date:		2019-06-09
--- Modified date:	2020-09-06
+-- Modified date:	2024-05-29
 -- Description:		Defragment indexes daily basis, this procedure called by SQL Agent
--- ==================================================================================
+
+	2024-05-29
+		- hobt_id depedency added thus it can only work SQL Server 2016 or + 
+-- ==================================================================================*/
 CREATE OR ALTER PROCEDURE [dbo].[IndexMaintenance]
 		@DatabaseName varchar (128) = null,
 		@PageCount varchar(6) = 990,
-		@ExcludeDatabases nvarchar(2000)
+		@ExcludeDatabases nvarchar(4000) = null,
+		@mode tinyint = 1 --- 1 = Extract Only, 2 = Execute
 AS
 BEGIN
 	
@@ -68,24 +71,26 @@ BEGIN
 						SchemaName varchar (126),
 						TableName varchar (250), 
 						IndexName varchar (250), 
-						FragPercent float, 
+						FragmentPercent numeric(6,2), 
 						IndexType tinyint, 
 						IsPrimaryKey bit, 
-						Fill_Factor float, 
+						Fill_Factor smallint, 
 						Page_Count int,
-						--Leaf_PageSplits int,
-						--NonLeaf_PageSplits int,
-						--Insert_Count int,
-						--Update_Count int,
-						--Delete_Count int,
 						User_Reads int,
 						System_Reads int,
-						Write_Percent float,
-						Read_Percent float);
+						Write_Percent numeric(6,2),
+						Read_Percent numeric(6,2),
+						PageSplitsTotal bigint,
+						RowLock_Count bigint,
+						RowLock_AvgWait_ms bigint,
+						PageLockCount bigint,
+						PageLock_AvgWait_ms bigint,
+						PageLatch_AvgWait_ms bigint
+						);
 
 ----------- DB Level Loop ------------------------------------------------------------------------------------------------------------------------------
-WHILE exists (SELECT * FROM @TargetDb)
-	BEGIN
+	WHILE exists (SELECT * FROM @TargetDb)
+		BEGIN
 		SET @DatabaseName = (SELECT TOP 1 DBName FROM @TargetDb);
 	
 		---------------------------------------------------------------------------Verify Database joined AG---------------------------------
@@ -119,17 +124,19 @@ WHILE exists (SELECT * FROM @TargetDb)
 									I.is_primary_key, 
 									I.fill_factor,
 									S.Page_Count,
-									--ops.leaf_allocation_count as Leaf_PageSplits,
-									--ops.nonleaf_allocation_count as NonLeaf_PageSplits,
-									--(ops.leaf_insert_count + ops.nonleaf_insert_count) as Insert_Count,
-									--(ops.leaf_update_count + ops.nonleaf_update_count) as Update_Count,
-									--(ops.leaf_delete_count + ops.nonleaf_delete_count + ops.leaf_ghost_count) as Delete_Count,
 									(user_scans + user_seeks + user_lookups) as User_Reads,
 									(system_scans + system_seeks + system_lookups) as system_Reads,
 									(user_updates + 0.0) / 
-									IIF( (user_scans + user_seeks + user_lookups + user_updates)=0, NULL, (user_scans + user_seeks + user_lookups + user_updates) ) as Write_Percent,
+									IIF( (user_scans + user_seeks + user_lookups + user_updates)=0, NULL, (user_scans + user_seeks + user_lookups + user_updates) ) * 100 as Write_Percent,
 									(user_scans + user_seeks + user_lookups + 0.0) / 
-									IIF( (user_scans + user_seeks + user_lookups + user_updates)=0, NULL, (user_scans + user_seeks + user_lookups + user_updates) ) as Read_Percent
+									IIF( (user_scans + user_seeks + user_lookups + user_updates)=0, NULL, (user_scans + user_seeks + user_lookups + user_updates) ) * 100 as Read_Percent
+
+									, (ops.leaf_allocation_count + ops.nonleaf_allocation_count) as PageSplitsTotal
+									, (ops.row_lock_count) RowLock_Count
+									, (ops.row_lock_wait_in_ms / IIF(ops.row_lock_wait_count = 0, 1, ops.row_lock_wait_count) ) RowLock_AvgWait_ms
+									, ops.page_lock_count as PageLockCount
+									, (ops.page_lock_wait_in_ms/ IIF(ops.page_lock_wait_count =0,1,ops.page_lock_wait_count) ) as PageLock_AvgWait_ms
+									, (ops.page_latch_wait_in_ms/ IIF(ops.page_latch_wait_count=0,1,ops.page_latch_wait_count)) as PageLatch_AvgWait_ms
 						from sys.dm_db_index_physical_stats (DB_ID (), NULL, NULL, NULL, ''LIMITED'') as S
 							left join sys.internal_partitions as inp 
 									on S.object_id = inp.object_id 
@@ -138,12 +145,12 @@ WHILE exists (SELECT * FROM @TargetDb)
 							join sys.indexes as I on s.object_id = I.object_id and s.index_id = I.index_id
 							join sys.objects as O on s.object_id = O.object_id 
 							join sys.schemas as sch on O.schema_id = sch.schema_id
-							--join sys.dm_db_index_operational_stats (DB_ID(), null, null, null) as ops 
-							--	on	s.database_id = ops.database_id 
-							--		and s.object_id = ops.object_id
-							--		and s.index_id = ops.index_id 
-							--		and s.partition_number = ops.partition_number
-							--		and inp.hobt_id = ops.hobt_id
+							join sys.dm_db_index_operational_stats (DB_ID(), null, null, null) as ops 
+								on	s.database_id = ops.database_id 
+									and s.object_id = ops.object_id
+									and s.index_id = ops.index_id 
+									and s.partition_number = ops.partition_number
+									and s.hobt_id = ops.hobt_id
 							left join sys.dm_db_index_usage_stats as us 
 								on s.database_id = us.database_id 
 								and s.object_id = us.object_id
@@ -170,14 +177,18 @@ WHILE exists (SELECT * FROM @TargetDb)
 				DELETE FROM @TargetDb WHERE DBName = @DatabaseName;
 			END
 
------------ Nested Loop for each database ------------------------------------------------------------------------------------------------------------------------------
+			Delete from @TargetDb where DBName = @DatabaseName;
+		END
+
+		IF @mode = 2
+			BEGIN --------> INDEXING LOOP Begins... 
 						Print	CONVERT(VARCHAR(20), GETDATE(),120) + ' DB level index maintenance loop srarting for [' + @DatabaseName + '] ;' ;						
 						while exists (select TableName from @Tbl)
 							BEGIN 
 								set @TableName =		(select top 1  TableName from @Tbl);
 								set @SchemaName =		(select top 1  SchemaName from @Tbl where TableName = @TableName);
 								set @IndexName =		(select top 1  IndexName from @Tbl where TableName = @TableName);
-								set @FragmentPercent =  (select max(FragPercent) from @Tbl where TableName = @TableName and IndexName = @IndexName);
+								set @FragmentPercent =  (select max(fragmentPercent) from @Tbl where TableName = @TableName and IndexName = @IndexName);
 --								PRINT 'Fragment % ' + cast(@FragmentPercent as varchar(15))+ ' for ' + @TableName + '.' + @IndexName;
 								set @IndexType =		(select top 1 IndexType from @Tbl where TableName = @TableName and IndexName = @IndexName);
 								set @IsPrimary =		(select top 1 IsPrimaryKey from @Tbl where TableName = @TableName and IndexName = @IndexName);
@@ -191,7 +202,7 @@ WHILE exists (SELECT * FROM @TargetDb)
 
 										Else 
 										begin
-											set @AlterIndexCmd = 'Use ' + @DatabaseName + ' alter index ['+ @IndexName + '] on ['+ @SchemaName +'].[' + @TableName + '] Rebuild WITH (SORT_IN_TEMPDB = ON, ONLINE = ON (WAIT_AT_LOW_PRIORITY ( MAX_DURATION = 1 MINUTES,  ABORT_AFTER_WAIT = BLOCKERS))); ';
+											set @AlterIndexCmd = 'Use ' + @DatabaseName + ' alter index ['+ @IndexName + '] on ['+ @SchemaName +'].[' + @TableName + '] Rebuild WITH (SORT_IN_TEMPDB = ON, ONLINE = ON (WAIT_AT_LOW_PRIORITY ( MAX_DURATION = 2 MINUTES,  ABORT_AFTER_WAIT = SELF))); ';
 										end
 									end
 							
@@ -218,13 +229,14 @@ WHILE exists (SELECT * FROM @TargetDb)
 							DELETE FROM @Tbl where TableName = @TableName and IndexName = @IndexName;
 						END
 						Print	CONVERT(VARCHAR(20), GETDATE(),120) + ' DB level index maintenance loop end for [' + @DatabaseName + '] ;' ;
------------ Nested Loop ends ------------------------------------------------------------------------------------------------------------------------------
-				Delete from @TargetDb where DBName = @DatabaseName;
-			END
------------ DB Level Loop ends ------------------------------------------------------------------------------------------------------------------------------
+			END ----------- INDEXING LOOP ends ------------------------------------------------------------------------------------------------------------------------------
+		IF @mode = 1
+			BEGIN 
+				select * from @Tbl;
+			END 
+		ELSE 
+			PRINT 'Please select valid MODE, 1 = Executing INDEX REBUILD, 2 = Read-only'
 	End
 	--Else Print 'Its not primary replica, Index Maintainance not performed!'
 END
-GO
-
-
+GO 
