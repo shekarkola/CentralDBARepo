@@ -4,14 +4,19 @@ GO
 /*-- ========================================================================================================================================================================
 -- Author:			Shekar Kola
 -- Create date:		2020-07-07
--- Description:		Extended properties for database classification and description 
+-- Description:		Collecting currently active session into table, so that it can be triggered by any alert/job to collect snapshot of active sessions 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 Versions:
-    20200707:
+	20240107 
+		- Added Database size details based on sys.master_files
+    20230419
+        - New parameter added, this will collect the source name which triggering the snapshot. default value is ''
+    20200908:
         - Initial Version
 
 ============================================================================================================================================================================*/
+
 CREATE OR ALTER PROCEDURE [dbo].[process_db_extended_property]
 
 	--@PropertyName nvarchar(128)
@@ -53,8 +58,13 @@ if (select object_id('database_properties')) is null
 			DB_STATE smallint,
 			APPLICATION_NAME nvarchar(250),
 			DB_DESCRIPTION nvarchar(500),
-			IS_IN_STANDBY bit
-		);
+			IS_IN_STANDBY bit,
+			ROW_DATA_MB int,
+			LOG_DATA_MB int,
+			FILESTREAM_DATA_MB int,
+			FULLTEXT_DATA_MB int,
+			UNKNOWN_DATA_MB int
+			);
 	end
 
 if (select object_id('tempdb..#TargetDBs')) is null 
@@ -71,8 +81,6 @@ if (select object_id('tempdb..#XProperties')) is null
 
 insert into #TargetDBs
 select name from sys.databases where state = 0 and database_id > 4;
-
-UPDATE STATISTICS #TargetDBs; ---- To avoid Temp Table Caching Issue
 
 Declare @dbname nvarchar(500);
 Declare @cmd1 nvarchar(4000);
@@ -100,7 +108,18 @@ drop table #TargetDBs;
 BEGIN
 	TRUNCATE TABLE database_properties;
 
-	insert into database_properties ([INSTANCEFULLNAME], [INSTANCENAME], [DATABASE_ID], [DATABASENAME], [CREATE_DATE], [COMPATIBILITY_LEVEL], [COLLATION_NAME], [RECOVERY_MODEL], [IS_AUTO_CREATE_STATS_ON], [IS_AUTO_UPDATE_STATS_ON], [IS_FULLTEXT_ENABLED], [IS_TRUSTWORTHY_ON], [IS_ENCRYPTED], [IS_QUERY_STORE_ON], [IS_PUBLISHED], [IS_SUBSCRIBED], [IS_MERGE_PUBLISHED], [IS_DISTRIBUTOR], [LOG_REUSE_WAIT], [IS_JOINED_AVAILABILITYGROUPS], [TARGET_RECOVERY_SECONDS], [CONTAINMENT], [AGNAME], [IS_AG_PRIMARY], [IS_BACKUP_SCHEDULED], [IS_INDEXMAINTAIN_SCHEDULED], [DB_State], [APPLICATION_NAME], [DB_DESCRIPTION], IS_IN_STANDBY)
+	WITH dbsize as (
+				select	database_id,
+						sum(case when type = 0 then ( (size * 8) ) end) as rowdata_kb,
+						sum(case when type = 1 then ( (size * 8) ) end) as logdata_kb,
+						sum(case when type = 2 then ( (size * 8) ) end) as filestreamdata_kb,
+						sum(case when type = 3 then ( (size * 8) ) end) as unknown_kb,
+						sum(case when type = 4 then ( (size * 8) ) end) as fulltextdata_kb
+				from sys.master_files
+				GROUP BY database_id
+				)
+
+	insert into database_properties ([INSTANCEFULLNAME], [INSTANCENAME], [DATABASE_ID], [DATABASENAME], [CREATE_DATE], [COMPATIBILITY_LEVEL], [COLLATION_NAME], [RECOVERY_MODEL], [IS_AUTO_CREATE_STATS_ON], [IS_AUTO_UPDATE_STATS_ON], [IS_FULLTEXT_ENABLED], [IS_TRUSTWORTHY_ON], [IS_ENCRYPTED], [IS_QUERY_STORE_ON], [IS_PUBLISHED], [IS_SUBSCRIBED], [IS_MERGE_PUBLISHED], [IS_DISTRIBUTOR], [LOG_REUSE_WAIT], [IS_JOINED_AVAILABILITYGROUPS], [TARGET_RECOVERY_SECONDS], [CONTAINMENT], [AGNAME], [IS_AG_PRIMARY], [IS_BACKUP_SCHEDULED], [IS_INDEXMAINTAIN_SCHEDULED], [DB_State], [APPLICATION_NAME], [DB_DESCRIPTION], IS_IN_STANDBY, ROW_DATA_MB, LOG_DATA_MB, FILESTREAM_DATA_MB, FULLTEXT_DATA_MB, UNKNOWN_DATA_MB)
 	select  @@SERVERNAME INSTANCEFULLNAME, @@SERVERNAME as INSTANCENAME,
 			d.database_id,
 			d.name as databasename,
@@ -129,12 +148,18 @@ BEGIN
 			state,
 			ep.property_value as  application_name,
 			ep2.property_value as description,
-			d.is_in_standby
+			d.is_in_standby,
+			(dbsize.rowdata_kb / 1024) row_data_mb,
+			(dbsize.logdata_kb / 1024) log_data_mb,
+			(dbsize.filestreamdata_kb / 1024) filestream_data_mb,
+			(dbsize.fulltextdata_kb / 1024) fulltext_data_mb,
+			(dbsize.unknown_kb / 1024) unkown_data_mb
 	from sys.databases as d 
 	left outer join master.sys.dm_hadr_database_replica_states as agdb on d.group_database_id = agdb.group_database_id and agdb.is_local = 1
 	left outer join master.sys.availability_groups as ag on agdb.group_id = ag.group_id
 	left outer join #XProperties as ep on d.database_id = ep.database_id and ep.property_name = 'Application'
 	left outer join #XProperties as ep2 on d.database_id = ep2.database_id and ep2.property_name = 'Description'
+	left outer join dbsize on d.database_id = dbsize.database_id 
 	where d.database_id > 4
 		and not exists (
 					select 1 
@@ -156,3 +181,4 @@ END
 -- select * from database_properties;
 
 END
+GO 

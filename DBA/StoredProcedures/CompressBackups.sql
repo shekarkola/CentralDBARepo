@@ -5,7 +5,7 @@ GO
 /*
 -- ======================================================================
 -- Author:			SHEKAR KOLA
--- Create date:		2022-10-10
+-- Create date:		2023-01-02
 -- Description:		Database backups archival and compression
 -- ======================================================================
 
@@ -14,6 +14,20 @@ Prerequisites:
 		- "xp_cmdshell" used for executing COPY, COMPRESS, and DELETE Files or Folders
 		- This Job will enable and disable the "xp_cmdshell" setting in SQL Instance, the login executing this job must need the permissions for "sp_configure"
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Version 20230102
+	-	New Parameter (@BackupSource) added, this can be used only when the backup files moved to different folder 
+		other than their native loction where they have created (as per MSDB log), 
+	-	Following new ROBOCOPY options added
+		/IS /IT --> To overwrite the files at destination 
+		/J --> To avoid memory overload 
+Version 20221223
+    -   @PurgeOnly parameter added, based on this parameter
+        The procedure focuses on Delete Commands to clean the backups either based on default retention days or selected retention days
+	-	@BackupDestination parameter set as Mandatory 
+
+Version 20221219
+    -   @WeeklyFullBackupDay parameter added, based on this parameter
+        Last Full Backup of the month will be identified, especically when the Weekly Full backup schedule followed for some databases
 
 Version 20221010
     -   Query stracture format improved as per Azure Data-Studio 
@@ -87,11 +101,14 @@ CREATE OR ALTER PROCEDURE [dbo].[CompressBackups]
 
 	@DatabaseName varchar(128) = null,
 	@BackupDate date = null,
-	@BackupDestination varchar(8000) = '', --- Default destination can be passed here
+	@BackupDestination varchar(8000), 
 	@ExcludeServers varchar(8000) = null,
 	@IncludeServers varchar(8000) = null,
 	@RetentionDays int = 32,
-    @Compress bit = 1
+    @Compress bit = 1,
+	@WeeklyFullBackupDay varchar(25) = 'Sunday', ---- In case weekly Full Backup followed, mentioned the day of Full backup, so that Last Full Backup of each month moved into Monthly Folder
+	@PurgeOnly bit = 0,
+	@BackupSource nvarchar(4000) = null --- This can be used Incase backup files moved to different folder other than the location where they created (as per MSDB log)
 AS
 BEGIN
 
@@ -111,32 +128,35 @@ BEGIN
             DECLARE @OPENQUERY nvarchar(4000), 
                     @TSQL_LinkServer nvarchar(4000), 
                     @TSQL_Local nvarchar(4000), 
-                    @LinkedServer nvarchar(50);
+                    @LinkedServer nvarchar(255);
 
-            Declare @ZipCommand varchar (1000);
-            Declare @DelCommand varchar (1000);
-            Declare @DelCommand2 varchar (1000);
-            Declare @ZipName varchar (1000);
+            Declare @ZipCommand nvarchar (1000);
+            Declare @DelCommand nvarchar (1000);
+            Declare @DelCommand2 nvarchar (1000);
+            Declare @ZipName nvarchar (1000);
             Declare @BackupDBName nvarchar (256);
-            Declare @BackupFileName varchar (1000);
+            Declare @BackupFileName nvarchar (1000);
             Declare @BackupFileID bigint;
-            Declare @ShareDrive nvarchar (1000);
-            Declare @ShareDriveBIN nvarchar (1000);
-            Declare @DelCommandBIN varchar (1000);
-            Declare @MoveSrcFolder varchar (1000);
-            Declare @MoveDstFolder varchar (1000);
-            Declare @MoveFile varchar (100);
-            Declare @MoveCommand varchar (1000);
-            Declare @BackupDateTxt VARCHAR(10);
+            Declare @ShareDrive nvarchar (4000);
+            Declare @ShareDriveBIN nvarchar (4000);
+            Declare @DelCommandBIN nvarchar (4000);
+            Declare @MoveSrcFolder nvarchar (4000);
+            Declare @MoveDstFolder nvarchar (4000);
+            Declare @MoveFile nvarchar (4000);
+            Declare @MoveCommand nvarchar (4000);
+            Declare @BackupDateTxt nVARCHAR(10);
 
-            Declare @commandResult table (Result varchar(max));
+            Declare @commandResult table (Result nvarchar(max));
             Declare @TargetServers table (ID int, LinkServer nvarchar(50));
             Declare @TargetDatabases table (DatabaseName varchar(128));
-            Declare @PrintMsg nvarchar(2000);
+            Declare @PrintMsg nvarchar(4000);
 
             Declare @SearchKeyDel varchar (50),
-                    @MonthlyCopyFiles varchar (1000),
-                    @MonthlyCopyFolder varchar (1000);
+                    @MonthlyCopyFiles nvarchar (4000),
+					@MonthlyCopyFiles2 nvarchar (4000),
+                    @MonthlyCopyFolder nvarchar (4000),
+					@MonthlyCopyFolder2 nvarchar (4000),
+					@LastWeekOfMonth datetime;
 
             --- Mandatory setting to be enabled to perform MS-DOS commands -------------------------
             BEGIN
@@ -167,6 +187,39 @@ BEGIN
                     begin
                         set @BackupDateTxt = (select convert(varchar(10), @BackupDate, 112));
                     end
+
+				if @WeeklyFullBackupDay is not null 
+					begin 
+						IF @WeeklyFullBackupDay = 'Monday'
+							begin 
+								SELECT @LastWeekOfMonth = DATEADD(day,DATEDIFF(day,'19000101',DATEADD(month,DATEDIFF(MONTH,0,  DATEADD(MONTH,-1,GETDATE())  /*YourValuehere*/),30))/7*7,'19000101')
+							end
+						IF @WeeklyFullBackupDay = 'Tuesday'
+							begin 
+								SELECT @LastWeekOfMonth = DATEADD(day,DATEDIFF(day,'19000102',DATEADD(month,DATEDIFF(MONTH,0,  DATEADD(MONTH,-1,GETDATE())  /*YourValuehere*/),30))/7*7,'19000102')
+							end
+						IF @WeeklyFullBackupDay = 'Wednesday'
+							begin 
+								SELECT @LastWeekOfMonth = DATEADD(day,DATEDIFF(day,'19000103',DATEADD(month,DATEDIFF(MONTH,0,  DATEADD(MONTH,-1,GETDATE())  /*YourValuehere*/),30))/7*7,'19000103')
+							end
+						IF @WeeklyFullBackupDay = 'Thursday'
+							begin 
+								SELECT @LastWeekOfMonth = DATEADD(day,DATEDIFF(day,'19000104',DATEADD(month,DATEDIFF(MONTH,0,  DATEADD(MONTH,-1,GETDATE())  /*YourValuehere*/),30))/7*7,'19000104')
+							end
+						IF @WeeklyFullBackupDay = 'Friday'
+							begin 
+								SELECT @LastWeekOfMonth = DATEADD(day,DATEDIFF(day,'19000105',DATEADD(month,DATEDIFF(MONTH,0,  DATEADD(MONTH,-1,GETDATE())  /*YourValuehere*/),30))/7*7,'19000105')
+							end
+						IF @WeeklyFullBackupDay = 'Saturday'
+							begin 
+								SELECT @LastWeekOfMonth = DATEADD(day,DATEDIFF(day,'19000106',DATEADD(month,DATEDIFF(MONTH,0,  DATEADD(MONTH,-1,GETDATE())  /*YourValuehere*/),30))/7*7,'19000106')
+							end
+						IF @WeeklyFullBackupDay = 'Sunday'
+							begin 
+								SELECT @LastWeekOfMonth = DATEADD(day,DATEDIFF(day,'19000107',DATEADD(month,DATEDIFF(MONTH,0,  DATEADD(MONTH,-1,GETDATE())  /*YourValuehere*/),30))/7*7,'19000107')
+
+							end
+					end 
 
                 SET @TSQL_LinkServer = 	'''' + 
                                                 'select		database_name, physical_device_name
@@ -269,16 +322,27 @@ BEGIN
             ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
             -- Moving Files into dated folderes
             ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-            IF @Compress = 1 
-            BEGIN  
-                ----- 1st Loop
+			  IF @PurgeOnly = 0      
+			  BEGIN ----- 1st Loop
                     While exists (select * from #TempBackupLog)
                         BEGIN
                             BEGIN TRY 
                             SET		@BackupFileID = (SELECT top 1 FileID FROM #TempBackupLog order by DatabaseName);
                             SET		@BackupDBName = (SELECT top 1 DatabaseName FROM #TempBackupLog WHERE FileID = @BackupFileID);
                             SET		@BackupFileName =(SELECT TOP 1 BackupFileName FROM #TempBackupLog where FileID = @BackupFileID);
-                            SELECT	@MoveSrcFolder = (LEFT (@BackupFileName, (LEN(@BackupFileName)) - CHARINDEX('\', REVERSE(@BackupFileName) ))) ;
+							IF @BackupSource is null 
+								BEGIN 
+								SELECT	@MoveSrcFolder = (LEFT (@BackupFileName, (LEN(@BackupFileName)) - CHARINDEX('\', REVERSE(@BackupFileName) )));
+								END
+							ELSE 
+								BEGIN 
+								SELECT @MoveSrcFolder = CASE WHEN (RIGHT(@BackupSource,1)) = '\' 
+																THEN (@BackupSource + @BackupDBName)
+																--LEFT(@BackupSource, LEN(@BackupSource) -1)
+															ELSE
+																(@BackupSource + '\' + @BackupDBName)
+														END ;
+								END								
                             
                             --- Custom destination location 
                             SELECT	@MoveDstFolder = @BackupDestination + @BackupDBName + '\' + @BackupDateTxt ;
@@ -290,7 +354,7 @@ BEGIN
                                                             ELSE CHARINDEX('\', REVERSE(@BackupFileName) )-1
                                                         END);
                             
-                            SET @MoveCommand = 'robocopy "' + @MoveSrcFolder + '" "' + @MoveDstFolder + '" "' + @MoveFile + '" /MOV';
+                            SET @MoveCommand = 'robocopy "' + @MoveSrcFolder + '" "' + @MoveDstFolder + '" "' + @MoveFile + '" /MOV /IS /IT';
 
                             Print CONVERT(VARCHAR(20),GETDATE(),120) + ' executing command: ' +  @MoveCommand +';'
                             EXEC xp_cmdshell @MoveCommand;
@@ -304,12 +368,13 @@ BEGIN
                         END CATCH 
                         
                         END 
-                ---- 1st while loop end 
+                END ---- 1st while loop end 
 
+            IF @Compress = 1 and @PurgeOnly = 0
+            BEGIN  ----- 2nd Loop
                 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
                 -- Once backups moved into dated folders, the compressing loop (.Zip) starts inside dated folders, and delete after compression
                 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-                ----- 2nd Loop
                 While exists (select * from @TargetDatabases)
                     BEGIN 
                         BEGIN TRY 
@@ -335,19 +400,30 @@ BEGIN
                                 --------------------------------------------------------------------------------------------------------------------
                                     set @SearchKeyDel = (select	convert (nvarchar (8), DATEADD (DAY, (@RetentionDays * -1), getdate ()), 112) );
                                     select @MonthlyCopyFiles =	 'mkdir "' + @ShareDrive + @DatabaseName +  '\' + FORMAT (DATEADD(MONTH,-1,GETDATE()), 'yyyy-MMM' ) + '\" & ' + 
-                                                                'copy "' + @ShareDrive + @DatabaseName +  '\*' + convert(varchar(10), EOMONTH (DATEADD(MONTH,-1,GETDATE())), 112) + '*.*" "' +
-                                                                @ShareDrive + @DatabaseName +  '\' + FORMAT (DATEADD(MONTH,-1,GETDATE()), 'yyyy-MMM' ) + '\"'; --- Copies last month-end backup files into month folder "yyyy-MMM"
+                                                                'copy "' + @ShareDrive + @DatabaseName +  '\*' + convert(varchar(10), EOMONTH (DATEADD(MONTH,-1,GETDATE())), 112) + '*FULL*.*" "' +
+                                                                @ShareDrive + @DatabaseName +  '\' + FORMAT (DATEADD(MONTH,-1,GETDATE()), 'yyyy-MMM' ) + '\"'; --- Copies last month-end FULL backup files into month folder "yyyy-MMM"
+
+                                    select @MonthlyCopyFiles2 =	 'mkdir "' + @ShareDrive + @DatabaseName +  '\' + FORMAT (DATEADD(MONTH,-1,GETDATE()), 'yyyy-MMM' ) + '\" & ' + 
+                                                                'copy "' + @ShareDrive + @DatabaseName +  '\*' + convert(varchar(10), @LastWeekOfMonth, 112) + '*FULL*.*" "' +
+                                                                @ShareDrive + @DatabaseName +  '\' + FORMAT (DATEADD(MONTH,-1,GETDATE()), 'yyyy-MMM' ) + '\"'; --- Copies last month-end FULL backup files into month folder "yyyy-MMM"
 
                                     select @MonthlyCopyFolder = 'robocopy "' + @ShareDrive + @DatabaseName +  '\' + convert(varchar(10), EOMONTH (DATEADD(MONTH,-1,GETDATE())), 112) +  '" "' +
+                                                                @ShareDrive + @DatabaseName +  '\' + FORMAT (DATEADD(MONTH,-1,GETDATE()), 'yyyy-MMM' ) + '" /MOVE'; --- Copies last month-end backup files into month folder "yyyy-MMM"
+
+                                    select @MonthlyCopyFolder2 = 'robocopy "' + @ShareDrive + @DatabaseName +  '\' + convert(varchar(10), @LastWeekOfMonth, 112) +  '" "' +
                                                                 @ShareDrive + @DatabaseName +  '\' + FORMAT (DATEADD(MONTH,-1,GETDATE()), 'yyyy-MMM' ) + '" /MOVE'; --- Copies last month-end backup files into month folder "yyyy-MMM"
 
                                     Select @DelCommand = 'Del "' + @ShareDrive + @DatabaseName + '\*' + @SearchKeyDel + '*.*" /F /Q'; --- Deletes files that named with older than 30 days or as per Retention parameter value
                                     Select @DelCommand2 = 'rmdir "' + @ShareDrive + @DatabaseName + '\' + @SearchKeyDel + '" /S /Q'; --- Deletes folders that named with older than 30 days or as per Retention parameter value
                             
-                                    Print FORMAT(GETDATE(), 'yyyy-MMM-dd HH:mm:ss') + ' Executing: ' + @MonthlyCopyFiles + '; ';
-                                    Print @MonthlyCopyFolder;
-                                    Exec xp_cmdshell @MonthlyCopyFiles;
-                                    Exec xp_cmdshell @MonthlyCopyFolder;
+									Print FORMAT(GETDATE(), 'yyyy-MMM-dd HH:mm:ss') + ' Executing (Monthly Copy files): ' + @MonthlyCopyFiles + '; ';
+									Exec xp_cmdshell @MonthlyCopyFiles;
+									Print FORMAT(GETDATE(), 'yyyy-MMM-dd HH:mm:ss') + ' Executing (Monthly Copy last FULL backup of month): ' + @MonthlyCopyFiles2 + '; ';
+									Exec xp_cmdshell @MonthlyCopyFiles2;
+									Print FORMAT(GETDATE(), 'yyyy-MMM-dd HH:mm:ss') + ' Executing (Monthly Copy folder): ' + @MonthlyCopyFolder + '; ';
+									Exec xp_cmdshell @MonthlyCopyFolder;
+									Print FORMAT(GETDATE(), 'yyyy-MMM-dd HH:mm:ss') + ' Executing (Monthly Copy last FULL backup of month): ' + @MonthlyCopyFolder2 + '; ';
+									Exec xp_cmdshell @MonthlyCopyFolder2;
 
                                     Print FORMAT(GETDATE(), 'yyyy-MMM-dd HH:mm:ss') + ' Executing (Old files cleanup): ' + @DelCommand + '; ';
                                     Print @DelCommand2;
@@ -375,10 +451,9 @@ BEGIN
                             delete from @CommandResult;
                         END CATCH 
                     END 
-                ---- 2nd Loop end
-            END
+            END ---- 2nd Loop end
 
-        IF @Compress = 0 ---- Without Compressing the Backup files into .zip file, all backup files moved into dated folders and month folders, and deleted as per retention period 
+        IF @Compress = 0 and @PurgeOnly = 0 ---- Without Compressing the Backup files into .zip file, all backup files moved into dated folders and month folders, and deleted as per retention period 
         BEGIN
             While exists (select * from @TargetDatabases)
             BEGIN
@@ -391,12 +466,19 @@ BEGIN
 
                     --- Monthly Copy Job --------------
                         set @SearchKeyDel = (select	convert (nvarchar (8), DATEADD (DAY, (@RetentionDays * -1), getdate ()), 112) );
-                        select @MonthlyCopyFiles =	 'mkdir "' +  @ShareDrive + @DatabaseName +  '\' + FORMAT (DATEADD(MONTH,-1,GETDATE()), 'yyyy-MMM' ) + '\" & ' + 
-                                                    'copy "' + @ShareDrive + @DatabaseName +  '\*' + convert(varchar(10), EOMONTH (DATEADD(MONTH,-1,GETDATE())), 112) + '*.*" "' +
-                                                    @ShareDrive + @DatabaseName +  '\' + FORMAT (DATEADD(MONTH,-1,GETDATE()), 'yyyy-MMM' ) + '\"'; --- Copies last month-end backup files into month folder "yyyy-MMM"
+						select @MonthlyCopyFiles =	 'mkdir "' + @ShareDrive + @DatabaseName +  '\' + FORMAT (DATEADD(MONTH,-1,GETDATE()), 'yyyy-MMM' ) + '\" & ' + 
+													'copy "' + @ShareDrive + @DatabaseName +  '\*' + convert(varchar(10), EOMONTH (DATEADD(MONTH,-1,GETDATE())), 112) + '*FULL*.*" "' +
+													@ShareDrive + @DatabaseName +  '\' + FORMAT (DATEADD(MONTH,-1,GETDATE()), 'yyyy-MMM' ) + '\"'; --- Copies last month-end FULL backup files into month folder "yyyy-MMM"
 
-                        select @MonthlyCopyFolder = 'robocopy "' + @ShareDrive + @DatabaseName +  '\' + convert(varchar(10), EOMONTH (DATEADD(MONTH,-1,GETDATE())), 112) +  '" "' +
-                                                    @ShareDrive + @DatabaseName +  '\' + FORMAT (DATEADD(MONTH,-1,GETDATE()), 'yyyy-MMM' ) + '" /MOVE'; --- Copies last month-end backup files into month folder "yyyy-MMM"
+						select @MonthlyCopyFiles2 =	 'mkdir "' + @ShareDrive + @DatabaseName +  '\' + FORMAT (DATEADD(MONTH,-1,GETDATE()), 'yyyy-MMM' ) + '\" & ' + 
+													'copy "' + @ShareDrive + @DatabaseName +  '\*' + convert(varchar(10), @LastWeekOfMonth, 112) + '*FULL*.*" "' +
+													@ShareDrive + @DatabaseName +  '\' + FORMAT (DATEADD(MONTH,-1,GETDATE()), 'yyyy-MMM' ) + '\"'; --- Copies last month-end FULL backup files into month folder "yyyy-MMM"
+
+						select @MonthlyCopyFolder = 'robocopy "' + @ShareDrive + @DatabaseName +  '\' + convert(varchar(10), EOMONTH (DATEADD(MONTH,-1,GETDATE())), 112) +  '" "' +
+													@ShareDrive + @DatabaseName +  '\' + FORMAT (DATEADD(MONTH,-1,GETDATE()), 'yyyy-MMM' ) + '" /MOVE'; --- Copies last month-end backup files into month folder "yyyy-MMM"
+
+						select @MonthlyCopyFolder2 = 'robocopy "' + @ShareDrive + @DatabaseName +  '\' + convert(varchar(10), @LastWeekOfMonth, 112) +  '" "' +
+													@ShareDrive + @DatabaseName +  '\' + FORMAT (DATEADD(MONTH,-1,GETDATE()), 'yyyy-MMM' ) + '" /MOVE'; --- Copies last month-end backup files into month folder "yyyy-MMM"
 
                         Select @DelCommand = 'Del "' + @ShareDrive + @DatabaseName + '\*' + @SearchKeyDel + '*.*" /F /Q'; --- Deletes files that named with older than 30 days or as per Retention parameter value
                         Select @DelCommand2 = 'rmdir "' + @ShareDrive + @DatabaseName + '\' + @SearchKeyDel + '" /S /Q'; --- Deletes folders that named with older than 30 days or as per Retention parameter value
@@ -404,10 +486,14 @@ BEGIN
                         Print FORMAT(GETDATE(), 'yyyy-MMM-dd HH:mm:ss') + ' Executing: ' + @ZipCommand + '; ';
                         Exec xp_cmdshell @ZipCommand;
 
-                        Print FORMAT(GETDATE(), 'yyyy-MMM-dd HH:mm:ss') + ' Executing: ' + @MonthlyCopyFiles + '; ';
-                        Print @MonthlyCopyFolder;
-                        Exec xp_cmdshell @MonthlyCopyFiles;
-                        Exec xp_cmdshell @MonthlyCopyFolder;
+						Print FORMAT(GETDATE(), 'yyyy-MMM-dd HH:mm:ss') + ' Executing (Monthly Copy files): ' + @MonthlyCopyFiles + '; ';
+						Exec xp_cmdshell @MonthlyCopyFiles;
+						Print FORMAT(GETDATE(), 'yyyy-MMM-dd HH:mm:ss') + ' Executing (Monthly Copy last FULL backup of month): ' + @MonthlyCopyFiles2 + '; ';
+						Exec xp_cmdshell @MonthlyCopyFiles2;
+						Print FORMAT(GETDATE(), 'yyyy-MMM-dd HH:mm:ss') + ' Executing (Monthly Copy folder): ' + @MonthlyCopyFolder + '; ';
+						Exec xp_cmdshell @MonthlyCopyFolder;
+						Print FORMAT(GETDATE(), 'yyyy-MMM-dd HH:mm:ss') + ' Executing (Monthly Copy last FULL backup of month): ' + @MonthlyCopyFolder2 + '; ';
+						Exec xp_cmdshell @MonthlyCopyFolder2;
 
                         Print FORMAT(GETDATE(), 'yyyy-MMM-dd HH:mm:ss') + ' Executing (Old files cleanup): ' + @DelCommand + '; ';
                         Print @DelCommand2;
@@ -431,6 +517,40 @@ BEGIN
                             '+
                             'Command5: ' +  @MonthlyCopyFolder 
                             ;
+                    DELETE FROM @TargetDatabases WHERE DatabaseName = @DatabaseName;
+                    DELETE FROM @CommandResult;
+                END CATCH
+            END  
+        END
+
+	IF @PurgeOnly = 1
+       BEGIN
+            While exists (select * from @TargetDatabases)
+            BEGIN
+                BEGIN TRY 
+                    SELECT top 1 @DatabaseName = DatabaseName from @TargetDatabases;
+
+                        set @SearchKeyDel = (select	convert (nvarchar (8), DATEADD (DAY, (@RetentionDays * -1), getdate ()), 112) );
+
+                        Select @DelCommand = 'Del "' + @ShareDrive + @DatabaseName + '\*' + @SearchKeyDel + '*.*" /F /Q'; --- Deletes files that named with older than 30 days or as per Retention parameter value
+                        Select @DelCommand2 = 'rmdir "' + @ShareDrive + @DatabaseName + '\' + @SearchKeyDel + '" /S /Q'; --- Deletes folders that named with older than 30 days or as per Retention parameter value
+                
+                        Print FORMAT(GETDATE(), 'yyyy-MMM-dd HH:mm:ss') + ' Executing (Old files cleanup): ' + @DelCommand + '; ';
+                        Print @DelCommand2;
+                        Exec xp_cmdshell @DelCommand;
+                        Exec xp_cmdshell @DelCommand2;
+
+                    DELETE FROM @TargetDatabases WHERE DatabaseName = @DatabaseName;
+                    DELETE FROM @CommandResult;
+                END TRY 
+
+                BEGIN CATCH 
+                    PRINT 'ERROR occured " ' + ERROR_MESSAGE() + ' while executing following commands: ' + '
+                    '+
+                            'Command1: ' +  @DelCommand + '
+                            ' +
+                            'Command2: ' +  @DelCommand2 + '
+                            ';
                     DELETE FROM @TargetDatabases WHERE DatabaseName = @DatabaseName;
                     DELETE FROM @CommandResult;
                 END CATCH
